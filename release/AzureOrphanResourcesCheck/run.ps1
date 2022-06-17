@@ -8,16 +8,31 @@ Write-Host "PowerShell HTTP trigger function processed a request."
 
 #####
 #
-# TT 20211215 AzureOrphanResourcesCheck
+# TT 20220617 AzureCertificatesCheck
 # This script is executed by an Azure Function App
-# It checks if there are some orphan resources in a specific subscription
+# It checks if there are some expiring certificates in a specific resources
 #
 # It can be triggered by any monitoring system to get the results and status
 #
-# "subscriptionid" GET parameter allows to specify the subscription to check
+# "mode" GET parameter allows to specify to search the whole subscription, 
+# or a specific application gateway or webapp.
+# possible values are : subscription, appgw, webapp
 #
+# if mode=subscription (default): 
+# "subscriptionid" GET parameter must be specified
 # "exclusion" GET parameter can be passed with comma separated resource names
 # that should be excluded from the check
+#
+# if mode=appgw : 
+# "subscriptionid" GET parameter must be specified
+# "appGwName" GET parameter must be specified
+#
+# if mode=webapp : 
+# "subscriptionid" GET parameter must be specified
+# "webAppName" GET parameter must be specified
+#
+# warning and critical thresholds can be passed in the GET parameters
+# and are expressed in days before expiry (default 40 and 20)
 #
 # used AAD credentials read access to the specified subscription
 #
@@ -34,20 +49,47 @@ if (-not $subscriptionid) {
     $subscriptionid = "00000000-0000-0000-0000-000000000000"
 }
 
+$mode = [string] $Request.Query.mode
+if (-not $mode) {
+    $mode = "subscription"
+}
+
+$appGwName = [string] $Request.Query.appGwName
+if (-not $appGwName) {
+    $appGwName = $null
+}
+
+$webAppName = [string] $Request.Query.webAppName
+if (-not $webAppName) {
+    $webAppName = $null
+}
+
+$warning = [int] $Request.Query.Warning
+if (-not $warning) {
+    $warning = 40
+}
+
+$critical = [int] $Request.Query.Critical
+if (-not $critical) {
+    $critical = 20
+}
+
 # init variables
 $signature = $env:Signature
 [System.Collections.ArrayList] $exclusionsTab = $exclusion.split(",")
-foreach ($current in ($env:AzureOrphanResourcesCheckGlobalExceptions).split(",")) {
+foreach ($current in ($env:AzureCertificatesCheckGlobalExceptions).split(",")) {
 	$exclusionsTab.Add($current)
 }
-$alert = 0
-$body_critical = ""
-$orphanResults = @()
+$datecheckWarning = (get-date).adddays($warning)
+$datecheckCritical = (get-date).adddays($critical)
+$statusOutput = ""
+$statusCode = 0
+$alertNumber = 0
 
 # connect with SPN account creds
 $tenantId = $env:TenantId
-$applicationId = $env:AzureOrphanResourcesCheckApplicationID
-$password = $env:AzureOrphanResourcesCheckSecret
+$applicationId = $env:AzureCertificatesCheckApplicationID
+$password = $env:AzureCertificatesCheckSecret
 $securePassword = ConvertTo-SecureString -String $password -AsPlainText -Force
 $credential = new-object -typename System.Management.Automation.PSCredential -argumentlist $applicationId, $securePassword
 Connect-AzAccount -Credential $credential -Tenant $tenantId -ServicePrincipal
@@ -64,234 +106,130 @@ $headers.Add("Authorization", "bearer " + "$($Token.Accesstoken)")
 $headers.Add("contenttype", "application/json")
 
 Try {
-	# disks
-	$uri = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Compute/disks?api-version=2021-04-01"
-	$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-	$disks = $results.value | where {$_.properties.diskState -eq "Unattached" -and $exclusionsTab -notcontains $_.Name}
-	while ($results.nextLink) {
-		$uri = $results.nextLink
-		$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-		$disks += $results.value | where {$_.properties.diskState -eq "Unattached" -and $exclusionsTab -notcontains $_.Name}
-	}
-	foreach ($disk in $disks) {
-		$currentItem = [pscustomobject]@{
-			ResourceGroup = $disk.id.Split("/")[4]
-			AppOwnerTag = $disk.tags.appOwner
-			ResourceType  = "ManagedDisk"
-			ResourceName  = $disk.Name
+Try {
+	if ($mode -eq "subscription" -or $mode -eq "appgw") {
+		$apiversion = "2021-08-01"
+		$uri = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Network/applicationGateways?api-version=$apiversion"
+		if ($mode -eq "appgw" -and $appGwName) {
+			$appgws = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value | where {$_.name -eq $appGwName}
 		}
-		$orphanResults += $currentItem
-	}
-
-	# nics
-	$uri = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Network/networkInterfaces?api-version=2021-05-01"
-	$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-	$nics = $results.value | where {$_.properties.VirtualMachine.Count -eq 0 -and (-not $_.properties.privateEndpoint) -and $exclusionsTab -notcontains $_.Name}
-	while ($results.nextLink) {
-		$uri = $results.nextLink
-		$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-		$nics += $results.value | where {$_.properties.VirtualMachine.Count -eq 0 -and (-not $_.properties.privateEndpoint) -and $exclusionsTab -notcontains $_.Name}
-	}
-	foreach ($nic in $nics) {
-		$currentItem = [pscustomobject]@{
-			ResourceGroup = $nic.id.Split("/")[4]
-			AppOwnerTag = $nic.tags.appOwner
-			ResourceType  = "NicInterface"
-			ResourceName  = $nic.Name
+		else {
+			$appgws = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value
 		}
-		$orphanResults += $currentItem
-	}
-
-	# nsgs
-	$uri = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Network/networkSecurityGroups?api-version=2021-05-01"
-	$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-	$nsgs = $results.value | where {$_.properties.subnets.Count -eq 0 -and $_.properties.subnets.NetworkInterface.Count -eq 0 -and $_.properties.networkInterfaces.Count -eq 0 -and $exclusionsTab -notcontains $_.Name}
-	while ($results.nextLink) {
-		$uri = $results.nextLink
-		$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-		$nsgs += $results.value | where {$_.properties.subnets.Count -eq 0 -and $_.properties.subnets.NetworkInterface.Count -eq 0 -and $_.properties.networkInterfaces.Count -eq 0 -and $exclusionsTab -notcontains $_.Name}
-	}
-	foreach ($nsg in $nsgs) {
-		$currentItem = [pscustomobject]@{
-			ResourceGroup = $nsg.id.Split("/")[4]
-			AppOwnerTag = $nsg.tags.appOwner
-			ResourceType  = "NetworkSecurityGroup"
-			ResourceName  = $nsg.Name
-		}
-		$orphanResults += $currentItem
-	}
-
-	# pub ips
-	$uri = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Network/publicIPAddresses?api-version=2021-05-01"
-	$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-	$ips = $results.value | where {$_.properties.ipconfiguration.Count -eq 0 -and $exclusionsTab -notcontains $_.Name}
-	while ($results.nextLink) {
-		$uri = $results.nextLink
-		$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-		$ips += $results.value | where {$_.properties.ipconfiguration.Count -eq 0 -and $exclusionsTab -notcontains $_.Name}
-	}
-	foreach ($ip in $ips) {
-		$currentItem = [pscustomobject]@{
-			ResourceGroup = $ip.id.Split("/")[4]
-			AppOwnerTag = $ip.tags.appOwner
-			ResourceType  = "PublicIp"
-			ResourceName  = $ip.Name
-		}
-		$orphanResults += $currentItem
-	}
-	
-	# routes
-	$uri = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Network/routeTables?api-version=2021-05-01"
-	$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-	$routes = $results.value | where {$_.properties.routes.Count -eq 0 -and $exclusionsTab -notcontains $_.Name}
-	while ($results.nextLink) {
-		$uri = $results.nextLink
-		$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-		$routes += $results.value | where {$_.properties.routes.Count -eq 0 -and $exclusionsTab -notcontains $_.Name}
-	}
-	foreach ($route in $routes) {
-		$currentItem = [pscustomobject]@{
-			ResourceGroup = $route.id.Split("/")[4]
-			AppOwnerTag = $route.tags.appOwner
-			ResourceType  = "RouteTable"
-			ResourceName  = $route.Name
-		}
-		$orphanResults += $currentItem
-	}
-
-	# snapshots
-	$uri = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Compute/snapshots?api-version=2021-04-01"
-	$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-	$snapshots = $results.value | where {$exclusionsTab -notcontains $_.Name}
-	while ($results.nextLink) {
-		$uri = $results.nextLink
-		$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-		$snapshots += $results.value | where {$exclusionsTab -notcontains $_.Name}
-	}
-	foreach ($snapshot in $snapshots) {
-		$currentItem = [pscustomobject]@{
-			ResourceGroup = $snapshot.id.Split("/")[4]
-			AppOwnerTag = $snapshot.tags.appOwner
-			ResourceType  = "Snapshot"
-			ResourceName  = $snapshot.Name
-		}
-		$orphanResults += $currentItem
-	}
-
-	# VM Hybrid Use Benefit & finopsstartstop tag
-	# ref: https://www.isjw.uk/post/azure/check-azure-hybrid-benefits-with-powershell/
-	$uri = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Compute/virtualMachines?api-version=2021-07-01"
-	$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-	$vms = $results.value | where {$_.properties.osProfile.windowsConfiguration -and (-not $_.properties.licenseType) -and $exclusionsTab -notcontains $_.Name}
-	$vmsNoFinopsTag = $results.value | where {!$_.tags.finopsstartstop -and $exclusionsTab -notcontains $_.Name}
-	while ($results.nextLink) {
-		$uri = $results.nextLink
-		$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-		$vms += $results.value | where {$_.properties.osProfile.windowsConfiguration -and (-not $_.properties.licenseType) -and $exclusionsTab -notcontains $_.Name}
-		$vmsNoFinopsTag += $results.value | where {!$_.tags.finopsstartstop -and $exclusionsTab -notcontains $_.Name}
-	}
-	foreach ($vm in $vms) {
-		$currentItem = [pscustomobject]@{
-			ResourceGroup = $vm.id.Split("/")[4]
-			AppOwnerTag = $vm.tags.appOwner
-			ResourceType  = "VmHybridBenefits"
-			ResourceName  = $vm.Name
-		}
-		$orphanResults += $currentItem
-	}
-	foreach ($vm in $vmsNoFinopsTag) {
-		$currentItem = [pscustomobject]@{
-			ResourceGroup = $vm.id.Split("/")[4]
-			AppOwnerTag = $vm.tags.appOwner
-			ResourceType  = "No finopsstartstop tag"
-			ResourceName  = $vm.Name
-		}
-		$orphanResults += $currentItem
-	}
-	
-	# SQL VM Hybrid Use Benefit
-	$uri = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.SqlVirtualMachine/sqlVirtualMachines?api-version=2017-03-01-preview"
-	$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-	$sqlvms = $results.value | where {$_.properties.sqlServerLicenseType -ne "AHUB" -and $_.properties.sqlImageSku -ne "Express" -and $exclusionsTab -notcontains $_.Name}
-	while ($results.nextLink) {
-		$uri = $results.nextLink
-		$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-		$sqlvms += $results.value | where {$_.properties.sqlServerLicenseType -ne "AHUB" -and $_.properties.sqlImageSku -ne "Express" -and $exclusionsTab -notcontains $_.Name}
-	}
-	foreach ($sqlvm in $sqlvms) {
-		$currentItem = [pscustomobject]@{
-			ResourceGroup = $sqlvm.id.Split("/")[4]
-			AppOwnerTag = $sqlvm.tags.appOwner
-			ResourceType  = "SqlVmHybridBenefits"
-			ResourceName  = $sqlvm.Name
-		}
-		$orphanResults += $currentItem
-	}
-	
-	# SQL database / elastic pool Hybrid Use Benefit
-	$uri = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Sql/servers?api-version=2021-02-01-preview"
-	$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-	$sqlservers = $results.value
-	while ($results.nextLink) {
-		$uri = $results.nextLink
-		$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-		$sqlvms += $results.value
-	}
-	foreach ($sqlserver in $sqlservers) {
-		$uri = "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$($sqlserver.id.Split("/")[4])/providers/Microsoft.Sql/servers/$($sqlserver.name)/databases?api-version=2021-08-01-preview"
-		$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-		$sqldatabases = $results.value | where {$_.properties.currentSku.name -ne "ElasticPool" -and $_.properties.licenseType -eq "LicenseIncluded" -and $exclusionsTab -notcontains $_.Name}
-		while ($results.nextLink) {
-			$uri = $results.nextLink
+		foreach ($appgw in $appgws) {
+			$uri = "https://management.azure.com$($appgw.id)?api-version=$apiversion"
 			$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-			$sqldatabases += $results.value | where {$_.properties.currentSku.name -ne "ElasticPool" -and $_.properties.licenseType -eq "LicenseIncluded" -and $exclusionsTab -notcontains $_.Name}
-		}
-		$uri = "https://management.azure.com/subscriptions/$subscriptionid/resourceGroups/$($sqlserver.id.Split("/")[4])/providers/Microsoft.Sql/servers/$($sqlserver.name)/elasticPools?api-version=2021-02-01-preview"
-		$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
-		$sqlpools = $results.value | where {$_.properties.licenseType -eq "LicenseIncluded" -and $exclusionsTab -notcontains $_.Name}
-		while ($results.nextLink) {
-			$uri = $results.nextLink
-			$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers | where {$_.properties.licenseType -eq "LicenseIncluded" -and $exclusionsTab -notcontains $_.Name}
-			$sqlpools += $results.value
+
+			foreach ($certificate in $results.properties.sslCertificates) {
+				if ($certificate.properties.provisioningState -ne "Succeeded") {
+					continue
+				}
+				$certBytes = [Convert]::FromBase64String($certificate.properties.publicCertData)
+				$p7b = New-Object System.Security.Cryptography.Pkcs.SignedCms
+				$p7b.Decode($certBytes)
+				$x509 = $p7b.Certificates[0]
+				#$x509 | fl
+				$timeDiff = (New-TimeSpan -Start (Get-Date) -End $x509.NotAfter).Days
+				if ($timeDiff -le 0) {
+					$statusOutput += "AppGw $($results.name) - Listener $($certificate.name) certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
+					$alertNumber++
+					if ($statusCode -eq 1) { $statusCode = 2 }
+				}
+				elseif ($datecheckCritical -gt $x509.NotAfter) {
+					$statusOutput += "AppGw $($results.name) - Listener $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
+					$alertNumber++
+					if ($statusCode -eq 1) { $statusCode = 2 }
+				}
+				elseif ($datecheckWarning -gt $x509.NotAfter) {
+					$statusOutput += "AppGw $($results.name) - Listener $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
+					$alertNumber++
+					if ($statusCode -eq 0) { $statusCode = 1 }
+				}
+			}
+
+			foreach ($certificate in $results.properties.authenticationCertificates) {
+				if ($certificate.properties.provisioningState -ne "Succeeded" -or !$certificate.properties.backendHttpSettings) {
+					continue
+				}
+				$certBytes = [Convert]::FromBase64String($certificate.properties.data)
+				$x509 = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($certbytes)
+				#$x509 | fl
+				$timeDiff = (New-TimeSpan -Start (Get-Date) -End $x509.NotAfter).Days
+				if ($timeDiff -le 0) {
+					$statusOutput += "AppGw $($results.name) - Backend $($certificate.name) certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
+					$alertNumber++
+					if ($statusCode -eq 1) { $statusCode = 2 }
+				}
+				elseif ($datecheckCritical -gt $x509.NotAfter) {
+					$statusOutput += "AppGw $($results.name) - Backend $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
+					$alertNumber++
+					if ($statusCode -eq 1) { $statusCode = 2 }
+				}
+				elseif ($datecheckWarning -gt $x509.NotAfter) {
+					$statusOutput += "AppGw $($results.name) - Backend $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
+					$alertNumber++
+					if ($statusCode -eq 0) { $statusCode = 1 }
+				}
+			}
 		}
 	}
-	foreach ($sqldatabase in $sqldatabases) {
-		$currentItem = [pscustomobject]@{
-			ResourceGroup = $sqldatabase.id.Split("/")[4]
-			AppOwnerTag = $sqldatabase.tags.appOwner
-			ResourceType  = "SqlDatabaseHybridBenefits"
-			ResourceName  = $sqldatabase.Name
+
+	if ($mode -eq "subscription" -or $mode -eq "webapp") {
+		$apiversion = "2021-02-01"
+		$uri = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Web/sites?api-version=$apiversion"
+		if ($mode -eq "webapp" -and $webAppName) {
+			$webapps = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value | where {$_.name -eq $webAppName}
 		}
-		$orphanResults += $currentItem
+		else {
+			$webapps = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value
+		}	
+		if ($webapps.count -ne 0) {
+			$uri = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Web/certificates?api-version=$apiversion"
+			$webappcertificates = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value
+		}
+		foreach ($webapp in $webapps) {
+			foreach ($cert in $webapp.properties.hostNameSslStates) {
+				if ($cert.thumbprint) {
+					$certs = $webappcertificates.properties | where {$_.thumbprint -eq $cert.thumbprint}
+					$expiryDate = $certs[0].expirationDate
+					$timeDiff = (New-TimeSpan -Start (Get-Date) -End $expiryDate).Days
+					if ($timeDiff -le 0) {
+						$statusOutput += "WebApp $($webapp.name) $($cert.name) certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($expiryDate.ToString("dd/MM/yyyy"))`n"
+						$alertNumber++
+						if ($statusCode -eq 1) { $statusCode = 2 }
+					}
+					elseif ($datecheckCritical -gt $expiryDate) {
+						$statusOutput += "WebApp $($webapp.name) $($cert.name) certificate expires in $timeDiff day(s) on $($expiryDate.ToString("dd/MM/yyyy"))`n"
+						$alertNumber++
+						if ($statusCode -eq 1) { $statusCode = 2 }
+					}
+					elseif ($datecheckWarning -gt $expiryDate) {
+						$statusOutput += "WebApp $($webapp.name) $($cert.name) certificate expires in $timeDiff day(s) on $($expiryDate.ToString("dd/MM/yyyy"))`n"
+						$alertNumber++
+						if ($statusCode -eq 0) { $statusCode = 1 }
+					}
+				}
+			}
+		}
 	}
-	foreach ($sqlpool in $sqlpools) {
-		$currentItem = [pscustomobject]@{
-			ResourceGroup = $sqlpool.id.Split("/")[4]
-			AppOwnerTag = $sqlpool.tags.appOwner
-			ResourceType  = "SqlElasticPoolHybridBenefits"
-			ResourceName  = $sqlpool.Name
-		}
-		$orphanResults += $currentItem
+	
+	if ($statusCode -eq 2) {
+		$body = "CRITICAL: $alertNumber certificate alert(s)`n" + $statusOutput
+	}
+	elseif ($statusCode -eq 1) {
+		$body = "WARNING: $alertNumber certificate alert(s)`n" + $statusOutput
+	}
+	else {
+		$body = "OK: no certificate alert`n"
 	}
 }
 Catch {
     if($_.ErrorDetails.Message) {
 		$msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error
-		$body_critical += $msg.code + ": " + $msg.message + "`n"
-		$alert++
+		$body = "CRITICAL: " + $msg.code + ": " + $msg.message + "`n"
     }
 }
 
-$alert += $orphanResults.count
-$body_critical += ($orphanResults | out-string)
-
-# add ending status and signature
-if ($alert) {
-    $body = "Status CRITICAL - Found $alert orphan ressource(s)!`n$body_critical$signature"
-}
-else {
-    $body = "Status OK - No orphan resource`n`n$signature"
-}
 Write-Host $body
 
 # Associate values to output bindings by calling 'Push-OutputBinding'.
