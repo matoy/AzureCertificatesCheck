@@ -132,12 +132,12 @@ Try {
 				if ($timeDiff -le 0) {
 					$statusOutput += "AppGw $($results.name) - Listener $($certificate.name) certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
 					$alertNumber++
-					if ($statusCode -eq 1) { $statusCode = 2 }
+					$statusCode = 2
 				}
 				elseif ($datecheckCritical -gt $x509.NotAfter) {
 					$statusOutput += "AppGw $($results.name) - Listener $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
 					$alertNumber++
-					if ($statusCode -eq 1) { $statusCode = 2 }
+					$statusCode = 2
 				}
 				elseif ($datecheckWarning -gt $x509.NotAfter) {
 					$statusOutput += "AppGw $($results.name) - Listener $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
@@ -157,12 +157,12 @@ Try {
 				if ($timeDiff -le 0) {
 					$statusOutput += "AppGw $($results.name) - Backend $($certificate.name) certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
 					$alertNumber++
-					if ($statusCode -eq 1) { $statusCode = 2 }
+					$statusCode = 2
 				}
 				elseif ($datecheckCritical -gt $x509.NotAfter) {
 					$statusOutput += "AppGw $($results.name) - Backend $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
 					$alertNumber++
-					if ($statusCode -eq 1) { $statusCode = 2 }
+					$statusCode = 2
 				}
 				elseif ($datecheckWarning -gt $x509.NotAfter) {
 					$statusOutput += "AppGw $($results.name) - Backend $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
@@ -195,12 +195,12 @@ Try {
 					if ($timeDiff -le 0) {
 						$statusOutput += "WebApp $($webapp.name) $($cert.name) certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($expiryDate.ToString("dd/MM/yyyy"))`n"
 						$alertNumber++
-						if ($statusCode -eq 1) { $statusCode = 2 }
+						$statusCode = 2
 					}
 					elseif ($datecheckCritical -gt $expiryDate) {
 						$statusOutput += "WebApp $($webapp.name) $($cert.name) certificate expires in $timeDiff day(s) on $($expiryDate.ToString("dd/MM/yyyy"))`n"
 						$alertNumber++
-						if ($statusCode -eq 1) { $statusCode = 2 }
+						$statusCode = 2
 					}
 					elseif ($datecheckWarning -gt $expiryDate) {
 						$statusOutput += "WebApp $($webapp.name) $($cert.name) certificate expires in $timeDiff day(s) on $($expiryDate.ToString("dd/MM/yyyy"))`n"
