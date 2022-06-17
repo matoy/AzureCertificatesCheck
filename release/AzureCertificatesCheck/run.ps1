@@ -106,7 +106,6 @@ $headers.Add("Authorization", "bearer " + "$($Token.Accesstoken)")
 $headers.Add("contenttype", "application/json")
 
 Try {
-Try {
 	if ($mode -eq "subscription" -or $mode -eq "appgw") {
 		$apiversion = "2021-08-01"
 		$uri = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Network/applicationGateways?api-version=$apiversion"
