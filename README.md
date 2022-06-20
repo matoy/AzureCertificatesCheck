@@ -5,7 +5,7 @@ This function app automatically checks if you have expiring certificates in reso
   
 You can also specify exception if you explicitely don't want to check specific resources.  
   
-Coupled with a common monitoring system (nagios, centreon, zabbix, or whatever you use), you'll automatically get alerted as soon as a virtual machine is not protected as it should be.  
+Coupled with a common monitoring system (nagios, centreon, zabbix, or whatever you use), you'll automatically get alerted as soon as a certificate in your PaaS resources is about to expire.  
 </br>
 </br>
 
