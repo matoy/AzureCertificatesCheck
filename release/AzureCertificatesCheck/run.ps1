@@ -214,7 +214,7 @@ Try {
 						if ($statusCode -eq 0) { $statusCode = 1 }
 					}
 					else {
-						$statusOutput += "OK: WebApp $($webapp.name) $($cert.name) certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($expiryDate.ToString("dd/MM/yyyy"))`n"
+						$statusOutput += "OK: WebApp $($webapp.name) $($cert.name) certificate expires $([Math]::Abs($timeDiff)) day(s) ago on $($expiryDate.ToString("dd/MM/yyyy"))`n"
 					}
 				}
 			}
