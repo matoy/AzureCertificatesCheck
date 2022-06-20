@@ -113,7 +113,7 @@ Try {
 			$appgws = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value | where {$_.name -eq $appGwName}
 		}
 		else {
-			$appgws = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value
+			$appgws = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value | where {$exclusionsTab -notcontains $_.name}
 		}
 		foreach ($appgw in $appgws) {
 			$uri = "https://management.azure.com$($appgw.id)?api-version=$apiversion"
@@ -130,19 +130,22 @@ Try {
 				#$x509 | fl
 				$timeDiff = (New-TimeSpan -Start (Get-Date) -End $x509.NotAfter).Days
 				if ($timeDiff -le 0) {
-					$statusOutput += "AppGw $($results.name) - Listener $($certificate.name) certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
+					$statusOutput = "CRITICAL: AppGw $($results.name) - Listener $($certificate.name) certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n" + $statusOutput
 					$alertNumber++
 					$statusCode = 2
 				}
 				elseif ($datecheckCritical -gt $x509.NotAfter) {
-					$statusOutput += "AppGw $($results.name) - Listener $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
+					$statusOutput = "CRITICAL: AppGw $($results.name) - Listener $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n" + $statusOutput
 					$alertNumber++
 					$statusCode = 2
 				}
 				elseif ($datecheckWarning -gt $x509.NotAfter) {
-					$statusOutput += "AppGw $($results.name) - Listener $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
+					$statusOutput = "WARNING: AppGw $($results.name) - Listener $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n" + $statusOutput
 					$alertNumber++
 					if ($statusCode -eq 0) { $statusCode = 1 }
+				}
+				else {
+					$statusOutput += "OK: AppGw $($results.name) - Listener $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
 				}
 			}
 
@@ -155,19 +158,22 @@ Try {
 				#$x509 | fl
 				$timeDiff = (New-TimeSpan -Start (Get-Date) -End $x509.NotAfter).Days
 				if ($timeDiff -le 0) {
-					$statusOutput += "AppGw $($results.name) - Backend $($certificate.name) certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
+					$statusOutput = "CRITICAL: AppGw $($results.name) - Backend $($certificate.name) certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n" + $statusOutput
 					$alertNumber++
 					$statusCode = 2
 				}
 				elseif ($datecheckCritical -gt $x509.NotAfter) {
-					$statusOutput += "AppGw $($results.name) - Backend $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
+					$statusOutput = "CRITICAL: AppGw $($results.name) - Backend $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n" + $statusOutput
 					$alertNumber++
 					$statusCode = 2
 				}
 				elseif ($datecheckWarning -gt $x509.NotAfter) {
-					$statusOutput += "AppGw $($results.name) - Backend $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
+					$statusOutput = "WARNING: AppGw $($results.name) - Backend $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n" + $statusOutput
 					$alertNumber++
 					if ($statusCode -eq 0) { $statusCode = 1 }
+				}
+				else {
+					$statusOutput += "OK: AppGw $($results.name) - Backend $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
 				}
 			}
 		}
@@ -180,7 +186,7 @@ Try {
 			$webapps = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value | where {$_.name -eq $webAppName}
 		}
 		else {
-			$webapps = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value
+			$webapps = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value | where {$exclusionsTab -notcontains $_.name}
 		}	
 		if ($webapps.count -ne 0) {
 			$uri = "https://management.azure.com/subscriptions/$subscriptionid/providers/Microsoft.Web/certificates?api-version=$apiversion"
@@ -193,25 +199,28 @@ Try {
 					$expiryDate = $certs[0].expirationDate
 					$timeDiff = (New-TimeSpan -Start (Get-Date) -End $expiryDate).Days
 					if ($timeDiff -le 0) {
-						$statusOutput += "WebApp $($webapp.name) $($cert.name) certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($expiryDate.ToString("dd/MM/yyyy"))`n"
+						$statusOutput = "CRITICAL: WebApp $($webapp.name) $($cert.name) certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($expiryDate.ToString("dd/MM/yyyy"))`n" + $statusOutput
 						$alertNumber++
 						$statusCode = 2
 					}
 					elseif ($datecheckCritical -gt $expiryDate) {
-						$statusOutput += "WebApp $($webapp.name) $($cert.name) certificate expires in $timeDiff day(s) on $($expiryDate.ToString("dd/MM/yyyy"))`n"
+						$statusOutput = "CRITICAL: WebApp $($webapp.name) $($cert.name) certificate expires in $timeDiff day(s) on $($expiryDate.ToString("dd/MM/yyyy"))`n" + $statusOutput
 						$alertNumber++
 						$statusCode = 2
 					}
 					elseif ($datecheckWarning -gt $expiryDate) {
-						$statusOutput += "WebApp $($webapp.name) $($cert.name) certificate expires in $timeDiff day(s) on $($expiryDate.ToString("dd/MM/yyyy"))`n"
+						$statusOutput = "WARNING: WebApp $($webapp.name) $($cert.name) certificate expires in $timeDiff day(s) on $($expiryDate.ToString("dd/MM/yyyy"))`n" + $statusOutput
 						$alertNumber++
 						if ($statusCode -eq 0) { $statusCode = 1 }
+					}
+					else {
+						$statusOutput += "OK: WebApp $($webapp.name) $($cert.name) certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($expiryDate.ToString("dd/MM/yyyy"))`n"
 					}
 				}
 			}
 		}
 	}
-	
+
 	if ($statusCode -eq 2) {
 		$body = "CRITICAL: $alertNumber certificate alert(s)`n" + $statusOutput
 	}
@@ -219,7 +228,7 @@ Try {
 		$body = "WARNING: $alertNumber certificate alert(s)`n" + $statusOutput
 	}
 	else {
-		$body = "OK: no certificate alert`n"
+		$body = "OK: no certificate alert`n" + $statusOutput
 	}
 }
 Catch {
