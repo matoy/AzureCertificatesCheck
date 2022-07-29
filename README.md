@@ -77,7 +77,10 @@ Calling the function once a day should be enough.
   
 You have make 1 function call per subscription by specifying the subscriptionid in the GET parameters: &subscriptionid=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx  
   
-You can also specify comma separated resource names to exclude with &exclusions=vm1,snapshotXXX,nic-abcdef  
+You can specify comma separated resource names to exclude with &exclusions=vm1,snapshotXXX,nic-abcdef  
+  
+You can also specify mode=appgw with appGwName=therightname: &mode=appgw&appGwName=myAppGw123 to check at the resource level instead of the whole subscription.  
+Same for mode=webapp&webappName=myWebApp123 or either mode=keyvault&kvName=myKeyvault123
   
 Be sure to have an appropriate timeout (30s or more) because if you have many resources, the function might need some time to execute.  
   
@@ -89,5 +92,5 @@ This is an example of what you'd get in Centreon:
 ## How to stop relying on this repository's zip  
 To make your function to stop relying on this repo's zip and become independant, follow these steps:  
 * remove zipReleaseURL app setting and restart app  
-* in "App files" section, edit "requirements.psd1" and uncomment the line: 'Az' = '6.*'  
+* in "App files" section, edit "requirements.psd1" and uncomment the line: 'Az' = '7.*'  
 * in "Functions" section, add a new function called "AzureCertificatesCheck" and paste in it the content of the file release/AzureCertificatesCheck/run.ps1 in this repository  

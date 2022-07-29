@@ -31,6 +31,10 @@ Write-Host "PowerShell HTTP trigger function processed a request."
 # "subscriptionid" GET parameter must be specified
 # "webAppName" GET parameter must be specified
 #
+# if mode=keyvault : 
+# "subscriptionid" GET parameter must be specified
+# "kvName" GET parameter must be specified
+#
 # warning and critical thresholds can be passed in the GET parameters
 # and are expressed in days before expiry (default 40 and 20)
 #
@@ -64,6 +68,11 @@ if (-not $webAppName) {
     $webAppName = $null
 }
 
+$kvName = [string] $Request.Query.kvName
+if (-not $kvName) {
+    $kvName = $null
+}
+
 $warning = [int] $Request.Query.Warning
 if (-not $warning) {
     $warning = 40
@@ -85,6 +94,7 @@ $datecheckCritical = (get-date).adddays($critical)
 $statusOutput = ""
 $statusCode = 0
 $alertNumber = 0
+$okNumber = 0
 
 # connect with SPN account creds
 $tenantId = $env:TenantId
@@ -120,7 +130,7 @@ Try {
 			$results = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers
 
 			foreach ($certificate in $results.properties.sslCertificates) {
-				if ($certificate.properties.provisioningState -ne "Succeeded") {
+				if ($certificate.properties.provisioningState -ne "Succeeded" -or !$certificate.properties.publicCertData) {
 					continue
 				}
 				$certBytes = [Convert]::FromBase64String($certificate.properties.publicCertData)
@@ -145,6 +155,7 @@ Try {
 					if ($statusCode -eq 0) { $statusCode = 1 }
 				}
 				else {
+					$okNumber++
 					$statusOutput += "OK: AppGw $($results.name) - Listener $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
 				}
 			}
@@ -173,6 +184,7 @@ Try {
 					if ($statusCode -eq 0) { $statusCode = 1 }
 				}
 				else {
+					$okNumber++
 					$statusOutput += "OK: AppGw $($results.name) - Backend $($certificate.name) certificate expires in $timeDiff day(s) on $($x509.NotAfter.ToString("dd/MM/yyyy"))`n"
 				}
 			}
@@ -214,8 +226,62 @@ Try {
 						if ($statusCode -eq 0) { $statusCode = 1 }
 					}
 					else {
+						$okNumber++
 						$statusOutput += "OK: WebApp $($webapp.name) $($cert.name) certificate expires $([Math]::Abs($timeDiff)) day(s) ago on $($expiryDate.ToString("dd/MM/yyyy"))`n"
 					}
+				}
+			}
+		}
+	}
+	
+	#this is executed only in keyvault mode, not subscription mode because of the need to apply RBAC permission on every KV data plane.
+	if ($mode -eq "keyvault") {
+		$apiversion = "2021-10-01"
+		$uri = "https://management.azure.com/subscriptions/$subscriptionid//providers/Microsoft.KeyVault/vaults?api-version=$apiversion"
+		$kv = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value | where {$_.name -eq $kvName}
+		if ($kv) {
+			$uri = "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token"
+			$vaultCreds = @{
+				'client_id' = $applicationId
+				'client_secret' = $password
+				'scope' = "https://vault.azure.net/.default"
+				'grant_type' = "client_credentials"
+			}
+			$vaultToken = (Invoke-RestMethod -Method Post -Uri $uri -Body $vaultCreds -ContentType 'application/x-www-form-urlencoded')
+			$vaultHeaders = @{}
+			$vaultHeaders.Add("Authorization", "bearer " + "$($vaultToken.access_token)")
+			$vaultHeaders.Add("contenttype", "application/json")
+			$origin = New-Object -Type DateTime -ArgumentList 1970, 1, 1, 0, 0, 0, 0
+			
+			$apiversion = "7.3"
+			$uri = "$($kv.properties.vaultUri)certificates?api-version=$apiversion"
+			$results = (Invoke-RestMethod -Method Get -Uri $uri -Headers $vaultHeaders).value
+
+			foreach ($certificate in $results) {
+				if ($certificate.attributes.enabled -ne "True") {
+					continue
+				}
+				$expiryDate = $origin.AddSeconds($certificate.attributes.exp)
+				$timeDiff = (New-TimeSpan -Start (Get-Date) -End $expiryDate).Days
+				$name = $certificate.id.Split("/")[-1]
+				if ($timeDiff -le 0) {
+					$statusOutput = "Keyvault $($kv.name) $.name certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($expiryDate.ToString("dd/MM/yyyy"))`n" + $statusOutput
+					$alertNumber++
+					$statusCode = 2
+				}
+				elseif ($datecheckCritical -gt $expiryDate) {
+					$statusOutput = "Keyvault $($kv.name) $name certificate expires in $timeDiff day(s) on $($expiryDate.ToString("dd/MM/yyyy"))`n" + $statusOutput
+					$alertNumber++
+					$statusCode = 2
+				}
+				elseif ($datecheckWarning -gt $expiryDate) {
+					$statusOutput = "Keyvault $($kv.name) $name certificate expires in $timeDiff day(s) on $($expiryDate.ToString("dd/MM/yyyy"))`n" + $statusOutput
+					$alertNumber++
+					if ($statusCode -eq 0) { $statusCode = 1 }
+				}
+				else {
+					$okNumber++
+					$statusOutput += "OK: Keyvault $($kv.name) $name certificate expires in $timeDiff day(s) on $($expiryDate.ToString("dd/MM/yyyy"))`n"
 				}
 			}
 		}
@@ -228,7 +294,7 @@ Try {
 		$body = "WARNING: $alertNumber certificate alert(s)`n" + $statusOutput
 	}
 	else {
-		$body = "OK: no certificate alert`n" + $statusOutput
+		$body = "OK: $okNumber certificate(s) fine`n" + $statusOutput
 	}
 }
 Catch {
