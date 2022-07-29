@@ -238,13 +238,8 @@ Try {
 	if ($mode -eq "keyvault") {
 		$apiversion = "2021-10-01"
 		$uri = "https://management.azure.com/subscriptions/$subscriptionid//providers/Microsoft.KeyVault/vaults?api-version=$apiversion"
-		if ($mode -eq "keyvault" -and $kvName) {
-			$kvs = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value | where {$_.name -eq $kvName}
-		}
-		else {
-			$kvs = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value | where {$exclusionsTab -notcontains $_.name}
-		}
-		if ($kvs.count -ne 0) {
+		$kv = (Invoke-RestMethod -Method Get -Uri $uri -Headers $headers).value | where {$_.name -eq $kvName}
+		if ($kv) {
 			$uri = "https://login.microsoftonline.com/$TenantId/oauth2/v2.0/token"
 			$vaultCreds = @{
 				'client_id' = $applicationId
@@ -257,12 +252,10 @@ Try {
 			$vaultHeaders.Add("Authorization", "bearer " + "$($vaultToken.access_token)")
 			$vaultHeaders.Add("contenttype", "application/json")
 			$origin = New-Object -Type DateTime -ArgumentList 1970, 1, 1, 0, 0, 0, 0
-		}
-		foreach ($kv in $kvs) {
+			
 			$apiversion = "7.3"
 			$uri = "$($kv.properties.vaultUri)certificates?api-version=$apiversion"
 			$results = (Invoke-RestMethod -Method Get -Uri $uri -Headers $vaultHeaders).value
-			echo "$($kv.name)"
 
 			foreach ($certificate in $results) {
 				if ($certificate.attributes.enabled -ne "True") {
@@ -271,7 +264,6 @@ Try {
 				$expiryDate = $origin.AddSeconds($certificate.attributes.exp)
 				$timeDiff = (New-TimeSpan -Start (Get-Date) -End $expiryDate).Days
 				$name = $certificate.id.Split("/")[-1]
-				echo "$name"
 				if ($timeDiff -le 0) {
 					$statusOutput = "Keyvault $($kv.name) $.name certificate has expired $([Math]::Abs($timeDiff)) day(s) ago on $($expiryDate.ToString("dd/MM/yyyy"))`n" + $statusOutput
 					$alertNumber++
