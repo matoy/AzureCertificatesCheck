@@ -300,7 +300,7 @@ Try {
 Catch {
     if($_.ErrorDetails.Message) {
 		$msg = ($_.ErrorDetails.Message | ConvertFrom-Json).error
-		$body = "CRITICAL: " + $msg.code + ": " + $msg.message + "`n"
+		$body = "UNKNOWN: " + $msg.code + ": " + $msg.message + "`n"
     }
 }
 
